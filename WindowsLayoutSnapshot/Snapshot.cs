@@ -1,17 +1,38 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections;
 using System.Drawing;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
+using System.IO;
+using System.Xml.Serialization;
+using System.Xml;
 
 namespace WindowsLayoutSnapshot {
+    
+    [Serializable]
+    public class Snapshot {
 
-    internal class Snapshot {
+        public List<Entry> m_placements = new List<Entry>();
+        public List<String> m_windowsBackToTop = new List<String>();
 
-        private Dictionary<IntPtr, WINDOWPLACEMENT> m_placements = new Dictionary<IntPtr, WINDOWPLACEMENT>();
-        private List<IntPtr> m_windowsBackToTop = new List<IntPtr>();
+        private Snapshot()
+        {
+            EnumWindows(EvalWindow, 0);
+
+            TimeTaken = DateTime.UtcNow;
+            UserInitiated = false;
+
+            var pixels = new List<long>();
+            foreach (var screen in Screen.AllScreens)
+            {
+                pixels.Add(screen.Bounds.Width * screen.Bounds.Height);
+            }
+            MonitorPixelCounts = pixels.ToArray();
+            NumMonitors = pixels.Count;
+        }
 
         private Snapshot(bool userInitiated) {
             EnumWindows(EvalWindow, 0);
@@ -33,20 +54,24 @@ namespace WindowsLayoutSnapshot {
 
         private bool EvalWindow(int hwndInt, int lParam) {
             var hwnd = new IntPtr(hwndInt);
+            Entry currEntry;
+            currEntry.hwnd = "0";
 
             if (!IsAltTabWindow(hwnd)) {
                 return true;
             }
 
             // EnumWindows returns windows in Z order from back to front
-            m_windowsBackToTop.Add(hwnd);
+            m_windowsBackToTop.Add(hwnd.ToString());
 
-            var placement = new WINDOWPLACEMENT();
-            placement.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
-            if (!GetWindowPlacement(hwnd, ref placement)) {
+            currEntry.placement = new WINDOWPLACEMENT();
+            currEntry.placement.length = Marshal.SizeOf(typeof(WINDOWPLACEMENT));
+            if (!GetWindowPlacement(hwnd, ref currEntry.placement)) {
                 throw new Exception("Error getting window placement");
             }
-            m_placements.Add(hwnd, placement);
+
+            currEntry.hwnd = hwnd.ToString();
+            m_placements.Add(currEntry);
 
             return true;
         }
@@ -55,6 +80,11 @@ namespace WindowsLayoutSnapshot {
         internal bool UserInitiated { get; private set; }
         internal long[] MonitorPixelCounts { get; private set; }
         internal int NumMonitors { get; private set; }
+
+        public string GetDisplayString()
+        {
+            return TimeTaken.ToLocalTime().ToString("MMM dd, h:mm tt"); 
+        }
 
         internal TimeSpan Age {
             get { return DateTime.UtcNow.Subtract(TimeTaken); }
@@ -82,25 +112,35 @@ namespace WindowsLayoutSnapshot {
             // first, restore the window rectangles and normal/maximized/minimized states
             foreach (var placement in m_placements) {
                 // this might error out if the window no longer exists
-                var placementValue = placement.Value;
+                WINDOWPLACEMENT placementValue = placement.placement;
+                var hwnd = new IntPtr(Int32.Parse(placement.hwnd));
 
                 // make sure points and rects will be inside monitor
-                IntPtr extendedStyles = GetWindowLongPtr(placement.Key, (-20)); // GWL_EXSTYLE
+                IntPtr extendedStyles = GetWindowLongPtr(hwnd, (-20)); // GWL_EXSTYLE
                 placementValue.ptMaxPosition = GetUpperLeftCornerOfNearestMonitor(extendedStyles, placementValue.ptMaxPosition);
                 placementValue.ptMinPosition = GetUpperLeftCornerOfNearestMonitor(extendedStyles, placementValue.ptMinPosition);
                 placementValue.rcNormalPosition = GetRectInsideNearestMonitor(extendedStyles, placementValue.rcNormalPosition);
 
-                SetWindowPlacement(placement.Key, ref placementValue);
+                SetWindowPlacement(hwnd, ref placementValue);
             }
 
             // now update the z-orders
             m_windowsBackToTop = m_windowsBackToTop.FindAll(IsWindowVisible);
+
             IntPtr positionStructure = BeginDeferWindowPos(m_windowsBackToTop.Count);
             for (int i = 0; i < m_windowsBackToTop.Count; i++) {
-                positionStructure = DeferWindowPos(positionStructure, m_windowsBackToTop[i], i == 0 ? IntPtr.Zero : m_windowsBackToTop[i - 1],
+                IntPtr first = new IntPtr(Int32.Parse(m_windowsBackToTop[i]));
+                IntPtr second = i == 0 ? IntPtr.Zero : new IntPtr(Int32.Parse(m_windowsBackToTop[i - 1]));
+                positionStructure = DeferWindowPos(positionStructure, first, second,
                     0, 0, 0, 0, DeferWindowPosCommands.SWP_NOMOVE | DeferWindowPosCommands.SWP_NOSIZE | DeferWindowPosCommands.SWP_NOACTIVATE);
             }
-            EndDeferWindowPos(positionStructure);
+            EndDeferWindowPos(positionStructure);   
+        }
+
+        private bool IsWindowVisible(string hWnd)
+        {
+            IntPtr ptrhWnd = new IntPtr(Int32.Parse(hWnd));
+            return(IsWindowVisible(ptrhWnd));
         }
 
         private static Point GetUpperLeftCornerOfNearestMonitor(IntPtr windowExtendedStyles, Point point) {
@@ -223,8 +263,9 @@ namespace WindowsLayoutSnapshot {
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
 
+        [Serializable]
         [StructLayout(LayoutKind.Sequential)]
-        private struct WINDOWPLACEMENT {
+        public struct WINDOWPLACEMENT {
             public int length;
             public int flags;
             public int showCmd;
@@ -233,12 +274,21 @@ namespace WindowsLayoutSnapshot {
             public RECT rcNormalPosition;
         }
 
+        [Serializable]
         [StructLayout(LayoutKind.Sequential)]
-        private struct RECT {
+        public struct RECT {
             public int Left;
             public int Top;
             public int Right;
             public int Bottom;
+        }
+
+        [Serializable]
+        [StructLayout(LayoutKind.Sequential)]
+        public struct Entry
+        {
+            public string hwnd;
+            public WINDOWPLACEMENT placement;
         }
 
         [DllImport("user32.dll")]
