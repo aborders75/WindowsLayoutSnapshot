@@ -18,8 +18,7 @@ using System.Xml;
 namespace WindowsLayoutSnapshot {
 
     public partial class TrayIconForm : Form {
-
-        private System.Windows.Forms.Timer m_snapshotTimer = new System.Windows.Forms.Timer();
+        
         private List<Snapshot> m_snapshots = new List<Snapshot>();
         private Snapshot m_menuShownSnapshot = null;
         private Padding? m_originalTrayMenuArrowPadding = null;
@@ -35,16 +34,10 @@ namespace WindowsLayoutSnapshot {
             InitializeComponent();  
             Visible = false;
 
-            m_snapshotTimer.Interval = (int)TimeSpan.FromSeconds(30).TotalMilliseconds;
-            m_snapshotTimer.Tick += snapshotTimer_Tick;
-            m_snapshotTimer.Enabled = false;
-
             me = trayMenu;
              
             ReadSnapshotList();
             UpdateRestoreChoicesInMenu();
-
-            //TakeSnapshot(false);
 
             Microsoft.Win32.SystemEvents.DisplaySettingsChanged += SystemEvents_DisplaySettingsChanged;
         }
@@ -59,14 +52,12 @@ namespace WindowsLayoutSnapshot {
 
         void SystemEvents_DisplaySettingsChanged(object sender, EventArgs e)
         {
-            m_snapshotTimer.Enabled = false;
             Thread.Sleep(10000);
             int screenCount = GetScreenCount();
             if (screenCount != lastCount && lastForMonitorCount.ContainsKey(screenCount))
             {
                 lastForMonitorCount[screenCount].Restore(null, null);
             }
-            m_snapshotTimer.Enabled = false;
         }
 
         private void WriteSnapshotList()
@@ -132,6 +123,7 @@ namespace WindowsLayoutSnapshot {
         private void clearSnapshotsToolStripMenuItem_Click(object sender, EventArgs e) {
             m_snapshots.Clear();
             UpdateRestoreChoicesInMenu();
+            WriteSnapshotList();
         }
 
         private void justNowToolStripMenuItem_Click(object sender, EventArgs e) {
@@ -181,25 +173,25 @@ namespace WindowsLayoutSnapshot {
         private void UpdateRestoreChoicesInMenu() {
             // construct the new list of menu items, then populate them
             // this function is idempotent
-
-            var snapshotsOldestFirst = new List<Snapshot>(CondenseSnapshots(m_snapshots, 20));
+            
             var newMenuItems = new List<ToolStripItem>();
 
             var maxNumMonitors = 0;
             var maxNumMonitorPixels = 0L;
             var showMonitorIcons = false;
-            foreach (var snapshot in snapshotsOldestFirst) {
-                if (maxNumMonitors != snapshot.NumMonitors && maxNumMonitors != 0) {
-                    showMonitorIcons = true;
-                }
+            foreach (var snapshot in m_snapshots) {
 
-                maxNumMonitors = Math.Max(maxNumMonitors, snapshot.NumMonitors);
                 foreach (var monitorPixels in snapshot.MonitorPixelCounts) {
                     maxNumMonitorPixels = Math.Max(maxNumMonitorPixels, monitorPixels);
                 }
+
+                maxNumMonitors = Math.Max(maxNumMonitors, snapshot.NumMonitors);
+                if (maxNumMonitors != 0) {
+                    showMonitorIcons = true;
+                }
             }
 
-            foreach (var snapshot in snapshotsOldestFirst) {
+            foreach (var snapshot in m_snapshots) {
                 var menuItem = new RightImageToolStripMenuItem(snapshot.GetDisplayString());
                 menuItem.Tag = snapshot;
                 menuItem.Click += snapshot.Restore;
@@ -220,7 +212,7 @@ namespace WindowsLayoutSnapshot {
                 newMenuItems.Add(menuItem);
             }
 
-            newMenuItems.Add(justNowToolStripMenuItem);
+            //newMenuItems.Add(justNowToolStripMenuItem);
             newMenuItems.Add(snapshotListStartLine);
             newMenuItems.Add(clearSnapshotsToolStripMenuItem);
             newMenuItems.Add(snapshotToolStripMenuItem);
@@ -269,63 +261,6 @@ namespace WindowsLayoutSnapshot {
             trayMenu.Items.AddRange(newMenuItems.ToArray());
         }
 
-        private List<Snapshot> CondenseSnapshots(List<Snapshot> snapshots, int maxNumSnapshots) {
-            if (maxNumSnapshots < 2) {
-                throw new Exception();
-            }
-
-            // find maximally different snapshots
-            // snapshots is ordered by time, ascending
-
-            // todo:
-            // consider these factors (in rough order of importance):
-            //   * number of total desktop pixels in snapshot (i.e. different monitor configs like two displays vs laptop display only etc)
-            //   * snapshot age
-            //   * window states (maximized/minimized)
-            //   * window positions
-
-            // for now, a poor man's version:
-
-            // remove automatically-taken snapshots > 3 days old, or manual snapshots > 5 days old
-            var y = new List<Snapshot>();
-            y.AddRange(snapshots);
-            while (y.Count > maxNumSnapshots) {
-                for (int i = 0; i < y.Count; i++) {
-                    if (y[i].Age > TimeSpan.FromDays(y[i].UserInitiated ? 5 : 3)) {
-                        y.RemoveAt(i);
-                        continue;
-                    }
-                }
-                break;
-            }
-
-            // remove entries with the time most adjacent to another time
-            while (y.Count > maxNumSnapshots) {
-                int ixMostAdjacentNeighbors = -1;
-                TimeSpan lowestDistanceBetweenNeighbors = TimeSpan.MaxValue;
-                for (int i = 1; i < y.Count - 1; i++) {
-                    var distanceBetweenNeighbors = (y[i + 1].TimeTaken - y[i - 1].TimeTaken).Duration();
-
-                    if (y[i].UserInitiated) {
-                        // a hack to make manual snapshots prioritized over automated snapshots
-                        distanceBetweenNeighbors += TimeSpan.FromDays(1000000);
-                    }
-                    if (DateTime.UtcNow.Subtract(y[i].TimeTaken).Duration() <= TimeSpan.FromHours(2)) {
-                        // a hack to make very recent snapshots prioritized over other snapshots
-                        distanceBetweenNeighbors += TimeSpan.FromDays(2000000);
-                    }
-
-                    if (distanceBetweenNeighbors < lowestDistanceBetweenNeighbors) {
-                        lowestDistanceBetweenNeighbors = distanceBetweenNeighbors;
-                        ixMostAdjacentNeighbors = i;
-                    }
-                }
-                y.RemoveAt(ixMostAdjacentNeighbors);
-            }
-
-            return y;
-        }
-
         private void SnapshotMousedOver(object sender, EventArgs e) {
             // We save and restore the current foreground window because it's our tray menu
             // I couldn't find a way to get this handle straight from the tray menu's properties;
@@ -350,7 +285,7 @@ namespace WindowsLayoutSnapshot {
 
         private void trayIcon_MouseClick(object sender, MouseEventArgs e) {
             m_menuShownSnapshot = Snapshot.TakeSnapshot(false);
-            justNowToolStripMenuItem.Tag = m_menuShownSnapshot;
+            //justNowToolStripMenuItem.Tag = m_menuShownSnapshot;
 
             // the context menu won't show by default on left clicks.  we're going to have to ask it to show up.
             if (e.Button == MouseButtons.Left) {

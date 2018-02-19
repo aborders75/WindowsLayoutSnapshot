@@ -76,10 +76,10 @@ namespace WindowsLayoutSnapshot {
             return true;
         }
 
-        internal DateTime TimeTaken { get; private set; }
-        internal bool UserInitiated { get; private set; }
-        internal long[] MonitorPixelCounts { get; private set; }
-        internal int NumMonitors { get; private set; }
+        public DateTime TimeTaken;
+        public bool UserInitiated;
+        public long[] MonitorPixelCounts;
+        public int NumMonitors;
 
         public string GetDisplayString()
         {

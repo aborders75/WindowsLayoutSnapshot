@@ -16,8 +16,6 @@ namespace WindowsLayoutSnapshot {
         Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new TrayIconForm());
-            //Application.Run(new TrayIconForm(use2ndIcon));
-
         }
     }  
 }
